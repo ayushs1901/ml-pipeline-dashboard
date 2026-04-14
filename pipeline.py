@@ -18,7 +18,7 @@ from sklearn.feature_selection import VarianceThreshold, mutual_info_classif, mu
 st.set_page_config(page_title="AutoML Pipeline Pro", layout="wide")
 
 st.markdown("""
-# 🚀 AutoML Pipeline Dashboard  
+# AutoML Pipeline Dashboard  
 ### End-to-End Machine Learning Workflow
 """)
 
