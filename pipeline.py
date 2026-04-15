@@ -63,10 +63,13 @@ st.markdown("---")
 
 if "data" not in st.session_state:
 st.session_state.data = None
+
 if "features" not in st.session_state:
 st.session_state.features = []
+
 if "target" not in st.session_state:
 st.session_state.target = None
+
 if "problem" not in st.session_state:
 st.session_state.problem = "Classification"
 
@@ -89,7 +92,7 @@ st.session_state.problem = problem_type
 
 file = st.file_uploader("Upload CSV", type=["csv"])
 
-if file:
+if file is not None:
     df = pd.read_csv(file)
     st.session_state.data = df
 
@@ -103,13 +106,17 @@ if file:
     st.session_state.target = target
     st.session_state.features = features
 
+    st.subheader("📊 Dataset Preview")
     st.dataframe(df.head(), use_container_width=True)
 
     if len(features) > 1:
         X = df[features].select_dtypes(include=np.number).dropna()
         if not X.empty:
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X)
+
             pca = PCA(n_components=2)
-            comp = pca.fit_transform(StandardScaler().fit_transform(X))
+            comp = pca.fit_transform(X_scaled)
 
             fig = px.scatter(
                 x=comp[:, 0],
@@ -149,7 +156,7 @@ fig = px.bar(missing[missing > 0], title="Missing Values", template="plotly_dark
 st.plotly_chart(fig, use_container_width=True)
 
 corr = df.select_dtypes(include=np.number).corr()
-fig_corr = px.imshow(corr, text_auto=True, color_continuous_scale='blues', template="plotly_dark")
+fig_corr = px.imshow(corr, text_auto=True, template="plotly_dark")
 st.plotly_chart(fig_corr)
 ```
 
@@ -175,14 +182,35 @@ if st.button("Apply Imputation"):
     imputer = SimpleImputer(strategy=method.lower())
     df[num_cols] = imputer.fit_transform(df[num_cols])
     st.session_state.data = df
-    st.success("Done")
+    st.success("Imputation Applied")
 
 method_o = st.selectbox("Outlier Method", ["IQR", "Isolation Forest", "DBSCAN", "OPTICS"])
 
-if method_o == "Isolation Forest":
+outliers = pd.Series(False, index=df.index)
+
+if method_o == "IQR":
+    Q1 = df[num_cols].quantile(0.25)
+    Q3 = df[num_cols].quantile(0.75)
+    IQR = Q3 - Q1
+    outliers = ((df[num_cols] < (Q1 - 1.5 * IQR)) |
+                (df[num_cols] > (Q3 + 1.5 * IQR))).any(axis=1)
+
+elif method_o == "Isolation Forest":
     iso = IsolationForest(contamination=0.05)
     outliers = iso.fit_predict(df[num_cols]) == -1
-    st.write("Outliers:", sum(outliers))
+
+elif method_o == "DBSCAN":
+    outliers = DBSCAN().fit_predict(df[num_cols]) == -1
+
+elif method_o == "OPTICS":
+    outliers = OPTICS().fit_predict(df[num_cols]) == -1
+
+st.write("Outliers Found:", int(outliers.sum()))
+
+if st.button("Remove Outliers"):
+    df = df[~outliers]
+    st.session_state.data = df
+    st.success("Outliers Removed")
 ```
 
 # ==================================================
@@ -211,10 +239,14 @@ if y.dtype == "object":
 if st.checkbox("Variance Threshold"):
     vt = VarianceThreshold()
     vt.fit(X)
-    st.write("Removed:", list(X.columns[~vt.get_support()]))
+    st.write("Removed Features:", list(X.columns[~vt.get_support()]))
 
 if st.checkbox("Mutual Info"):
-    mi = mutual_info_classif(X, y) if st.session_state.problem == "Classification" else mutual_info_regression(X, y)
+    if st.session_state.problem == "Classification":
+        mi = mutual_info_classif(X, y)
+    else:
+        mi = mutual_info_regression(X, y)
+
     mi_df = pd.DataFrame({"Feature": X.columns, "Score": mi})
     fig = px.bar(mi_df, x="Feature", y="Score", template="plotly_dark")
     st.plotly_chart(fig)
@@ -249,12 +281,22 @@ else:
 if st.button("Train Model"):
     cv = cross_validate(model, X, y, cv=5, return_train_score=True)
 
+    train_score = np.mean(cv["train_score"])
+    test_score = np.mean(cv["test_score"])
+
     fig = go.Figure()
-    fig.add_bar(name="Train", x=["Score"], y=[np.mean(cv["train_score"])])
-    fig.add_bar(name="Test", x=["Score"], y=[np.mean(cv["test_score"])])
+    fig.add_bar(name="Train", x=["Score"], y=[train_score])
+    fig.add_bar(name="Test", x=["Score"], y=[test_score])
     fig.update_layout(barmode='group', template="plotly_dark")
 
     st.plotly_chart(fig)
+
+    if train_score > test_score + 0.15:
+        st.error("Overfitting ⚠️")
+    elif train_score < 0.5:
+        st.warning("Underfitting ⚠️")
+    else:
+        st.success("Good Model ✅")
 ```
 
 # ==================================================
@@ -275,7 +317,7 @@ y = df[st.session_state.target]
 st.header("⚙️ Tuning")
 
 if st.button("Run Grid Search"):
-    param = {"n_estimators": [50, 100], "max_depth": [None, 5]}
+    param = {"n_estimators": [50, 100], "max_depth": [None, 5, 10]}
     model = RandomForestClassifier() if st.session_state.problem == "Classification" else RandomForestRegressor()
 
     grid = GridSearchCV(model, param, cv=3)
